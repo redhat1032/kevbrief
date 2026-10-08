@@ -1,11 +1,11 @@
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-*.pdb
 *.log
-*.sqlite3
+.pytest_cache/
+build/
+dist/
+*.egg-info/
 
 # Environments
 .env
@@ -15,9 +15,11 @@ env/
 .idea/
 .vscode/
 
-# Streamlit
-.streamlit/
+# Streamlit: commit config.toml, never secrets
+.streamlit/secrets.toml
+
+# Legacy local save file from v1
 saved_articles.json
 
-# OS crap
+# OS
 .DS_Store

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Constructed fixture in the shape of The Hacker News RSS: used for de-duplication and HTML-stripping tests. -->
+<rss version="2.0">
+  <channel>
+    <title>The Hacker News</title>
+    <link>https://thehackernews.com</link>
+    <item>
+      <title>Citrix Patches Actively Exploited NetScaler Flaw (CVE-2026-88779)</title>
+      <link>https://thehackernews.com/2026/10/citrix-patches-netscaler.html?utm_source=rss&amp;utm_medium=feed</link>
+      <pubDate>Wed, 07 Oct 2026 09:15:00 +0000</pubDate>
+      <description><![CDATA[<p>Citrix fixed <b>CVE-2026-88779</b> in NetScaler ADC &amp; Gateway.</p><script>alert(1)</script><img src=x onerror="alert(2)">]]></description>
+    </item>
+    <item>
+      <title>Ransomware Gang Hits Regional Hospital Chain</title>
+      <link>https://thehackernews.com/2026/10/hospital-ransomware.html</link>
+      <pubDate>Tue, 06 Oct 2026 18:00:00 +0000</pubDate>
+      <description>A ransomware group claimed the attack.</description>
+    </item>
+  </channel>
+</rss>

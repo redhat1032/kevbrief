@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?><feed
+	xmlns="http://www.w3.org/2005/Atom"
+	xmlns:thr="http://purl.org/syndication/thread/1.0"
+	xml:lang="en-US"
+	>
+	<title type="text">Schneier on Security</title>
+	<subtitle type="text"></subtitle>
+
+	<updated>2026-10-08T11:08:05Z</updated>
+
+	<link rel="alternate" type="text/html" href="https://www.schneier.com/" />
+	<id>https://www.schneier.com/feed/atom/</id>
+	<link rel="self" type="application/atom+xml" href="https://www.schneier.com/feed/atom/" />
+
+	
+<icon>https://www.schneier.com/wp-content/uploads/2020/06/cropped-favicon-1-32x32.png</icon>
+	<entry>
+		<author>
+			<name>Bruce Schneier</name>
+					</author>
+
+		<title type="html"><![CDATA[How Technology Empowers—and Imperils—Dictators]]></title>
+		<link rel="alternate" type="text/html" href="https://www.schneier.com/blog/archives/2026/10/how-technology-empowers-and-imperils-dictators.html" />
+
+		<id>https://www.schneier.com/?p=72750</id>
+		<updated>2026-10-08T11:08:05Z</updated>
+		<published>2026-10-08T11:07:35Z</published>
+		<category scheme="https://www.schneier.com/" term="Uncategorized" /><category scheme="https://www.schneier.com/" term="AI" /><category scheme="https://www.schneier.com/" term="China" /><category scheme="https://www.schneier.com/" term="LLM" /><category scheme="https://www.schneier.com/" term="Russia" />
+		<summary type="html"><![CDATA[<p><em>This essay was written with Seva Gunitsky, and originally appeared in <a href="https://www.foreignaffairs.com/united-states/artificial-intelligence-autocrat-technology-empowers-dictators">Foreign Affairs</a>.</em></p>
+<p>Two weeks after Moscow&#8217;s full-scale invasion of Ukraine in March 2022, the Russian TV Channel One editor Marina Ovsyannikova burst onto the set of the evening newscast. She held up a hand-drawn sign behind the anchor&#8217;s head that read: &#8220;Stop the war. Don&#8217;t believe propaganda. They&#8217;re lying to you!&#8221; She shouted, &#8220;No to war!&#8221;]]></summary>
+			</entry>
+<entry>
+		<author>
+			<name>Bruce Schneier</name>
+					</author>
+
+		<title type="html"><![CDATA[Apple’s Verified Photography System]]></title>
+		<link rel="alternate" type="text/html" href="https://www.schneier.com/blog/archives/2026/10/apples-verified-photography-system.html" />
+
+		<id>https://www.schneier.com/?p=72741</id>
+		<updated>2026-10-08T05:44:43Z</updated>
+		<published>2026-10-07T11:07:36Z</published>
+		<category scheme="https://www.schneier.com/" term="Uncategorized" /><category scheme="https://www.schneier.com/" term="Apple" /><category scheme="https://www.schneier.com/" term="authentication" /><category scheme="https://www.schneier.com/" term="cameras" /><category scheme="https://www.schneier.com/" term="reports" />
+		<summary type="html"><![CDATA[<p>Apple just <a href="https://security.apple.com/blog/apple-reference-image/">released</a> a system called &#8220;Reference Image.&#8221; It can verify the image is exactly as taken by an iPhone&#8212;new models only&#8212;without tying it to a specific iPhone or photographer. It can also verify that multiple images came from the same iPhone.</p>
+<blockquote><p>Other industry solutions require a photographer or institution to vouch for an image using their own credentials. We are concerned this puts some photographers, such as those operating in conflict zones, in a difficult position; it sho]]></summary>
+			</entry>
+</feed>

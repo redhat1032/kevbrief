@@ -1,3 +1,11 @@
-[server]
-pythonVersion = "3.11"
+# Streamlit settings. The Python version is chosen in the Streamlit Community Cloud
+# deploy dialog, not here.
+[theme]
+base = "dark"
+primaryColor = "#1ce0ff"
+backgroundColor = "#020509"
+secondaryBackgroundColor = "#050a12"
+textColor = "#f9fbff"
 
+[browser]
+gatherUsageStats = false
