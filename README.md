@@ -7,7 +7,7 @@ checks each one against the [CISA Known Exploited Vulnerabilities (KEV) catalog]
 and [FIRST EPSS](https://www.first.org/epss/), and puts the ones to patch first at the top.
 The news articles are still there, but as supporting coverage under the patch list.
 
-It is a small Streamlit app with a dark theme. No account, database or API key is required.
+It is a small Streamlit app with a custom dark interface. No account, database or API key is required.
 
 ## What it does
 
@@ -72,6 +72,7 @@ Python 3.11, 3.12 and 3.13.
 | `app.py` | Streamlit UI only |
 | `kevbrief/feeds.py` | Fetching, HTML stripping, dates, tags, de-duplication |
 | `kevbrief/enrich.py` | KEV, EPSS, paced NVD lookups, patch-priority ordering |
+| `kevbrief/display.py` | Value formatting (EPSS %, CVSS, due dates, vendor/product) and the HTML for stat cards and the patch table |
 | `tests/` | pytest suite and recorded fixtures |
 | `.streamlit/config.toml` | Dark theme settings |
 

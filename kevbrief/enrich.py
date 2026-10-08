@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import requests
 
+from .display import vendor_product
 from .feeds import USER_AGENT
 
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -225,7 +226,9 @@ def build_patch_table(items: List[Dict[str, Any]], kev: Dict[str, Dict[str, Any]
             "kev_date_added": k.get("date_added", ""),
             "kev_due_date": k.get("due_date", ""),
             "ransomware_use": k.get("ransomware", "") if k else "",
-            "vendor_product": " ".join(x for x in (k.get("vendor"), k.get("product")) if x),
+            "vendor": k.get("vendor", ""),
+            "product": k.get("product", ""),
+            "vendor_product": vendor_product(k.get("vendor", ""), k.get("product", "")),
             "kev_name": k.get("name", ""),
             "required_action": k.get("required_action", ""),
             "epss": e.get("epss"),
