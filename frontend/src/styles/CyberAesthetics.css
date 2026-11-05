@@ -1,0 +1,87 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Orbitron:wght@400;700;900&display=swap');
+
+:root {
+  --bg-dark: #050507;
+  --bg-panel: rgba(20, 20, 30, 0.6);
+  --primary-neon: #00f3ff;
+  --secondary-neon: #bc13fe;
+  --alert-red: #ff2a2a;
+  --warning-orange: #ffae00;
+  --text-main: #e0e0e0;
+  --text-dim: #8a8a8a;
+  
+  --glass-border: 1px solid rgba(255, 255, 255, 0.1);
+  --neon-glow: 0 0 10px rgba(0, 243, 255, 0.5);
+  --red-glow: 0 0 10px rgba(255, 42, 42, 0.5);
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-dark);
+  color: var(--text-main);
+  font-family: 'JetBrains Mono', monospace;
+  overflow-x: hidden;
+}
+
+h1, h2, h3 {
+  font-family: 'Orbitron', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+}
+
+.cyber-container {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.cyber-card {
+  background: var(--bg-panel);
+  border: var(--glass-border);
+  backdrop-filter: blur(10px);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.cyber-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  background: var(--primary-neon);
+  box-shadow: var(--neon-glow);
+  opacity: 0.7;
+}
+
+.cyber-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+  border-color: rgba(0, 243, 255, 0.3);
+}
+
+.glitch-text {
+  position: relative;
+  color: var(--primary-neon);
+  text-shadow: var(--neon-glow);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-dark); 
+}
+::-webkit-scrollbar-thumb {
+  background: var(--primary-neon); 
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--secondary-neon); 
+}
