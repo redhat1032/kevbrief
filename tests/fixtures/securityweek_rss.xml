@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"
+	xmlns:content="http://purl.org/rss/1.0/modules/content/"
+	xmlns:wfw="http://wellformedweb.org/CommentAPI/"
+	xmlns:dc="http://purl.org/dc/elements/1.1/"
+	xmlns:atom="http://www.w3.org/2005/Atom"
+	xmlns:sy="http://purl.org/rss/1.0/modules/syndication/"
+	xmlns:slash="http://purl.org/rss/1.0/modules/slash/"
+	>
+
+<channel>
+	<title>SecurityWeek</title>
+	<atom:link href="https://www.securityweek.com/feed/" rel="self" type="application/rss+xml" />
+	<link>https://www.securityweek.com/</link>
+	<description>Cybersecurity News, Insights &#38; Analysis</description>
+	<lastBuildDate>Thu, 08 Oct 2026 16:53:08 +0000</lastBuildDate>
+	<language>en-US</language>
+	<sy:updatePeriod>
+	hourly	</sy:updatePeriod>
+	<sy:updateFrequency>
+	1	</sy:updateFrequency>
+	<generator>https://wordpress.org/?v=7.1.3</generator>
+
+<image>
+	<url>https://www.securityweek.com/wp-content/uploads/2023/01/cropped-SecurityWeek-Icon-32x32.jpeg</url>
+	<title>SecurityWeek</title>
+	<link>https://www.securityweek.com/</link>
+	<width>32</width>
+	<height>32</height>
+</image> 
+	<item>
+		<title>Cisco Patches a Dozen Critical Vulnerabilities</title>
+		<link>https://www.securityweek.com/cisco-patches-a-dozen-critical-vulnerabilities/</link>
+		
+		<dc:creator><![CDATA[Ionut Arghire]]></dc:creator>
+		<pubDate>Thu, 08 Oct 2026 15:28:06 +0000</pubDate>
+				<category><![CDATA[Vulnerabilities]]></category>
+		<category><![CDATA[Cisco]]></category>
+		<category><![CDATA[patches]]></category>
+		<category><![CDATA[vulnerability]]></category>
+		<guid isPermaLink="false">https://www.securityweek.com/?p=49883</guid>
+
+					<description><![CDATA[<p>The security defects could lead to unauthorized access, information leaks, privilege escalation, DoS attacks, and remote code execution.</p>
+<p>The post <a href="https://www.securityweek.com/cisco-patches-a-dozen-critical-vulnerabilities/">Cisco Patches a Dozen Critical Vulnerabilities</a> appeared first on <a href="https://www.securityweek.com">SecurityWeek</a>.</p>
+]]></description>
+		
+		
+		
+			</item>
+<item>
+		<title>Security Awareness Training Isn&#8217;t Dead, but It Needs a Rethink</title>
+		<link>https://www.securityweek.com/security-awareness-training-isnt-dead-but-it-needs-a-rethink/</link>
+		
+		<dc:creator><![CDATA[Kevin Townsend]]></dc:creator>
+		<pubDate>Thu, 08 Oct 2026 14:30:00 +0000</pubDate>
+				<category><![CDATA[CISO Strategy]]></category>
+		<category><![CDATA[Management & Strategy]]></category>
+		<category><![CDATA[Training & Awareness]]></category>
+		<category><![CDATA[awareness]]></category>
+		<category><![CDATA[Featured]]></category>
+		<category><![CDATA[security awareness]]></category>
+		<category><![CDATA[Training]]></category>
+		<guid isPermaLink="false">https://www.securityweek.com/?p=49788</guid>
+
+					<description><![CDATA[<p>All enterprises conduct security awareness training for their employees. But whether this has tangible benefits is debatable.</p>
+<p>The post <a href="https://www.securityweek.com/security-awareness-training-isnt-dead-but-it-needs-a-rethink/">Security Awareness Training Isn&#8217;t Dead, but It Needs a Rethink</a> appeared first on <a href="https://www.securityweek.com">SecurityWeek</a>.</p>
+]]></description>
+		
+		
+		
+			</item>
+  </channel>
+</rss>

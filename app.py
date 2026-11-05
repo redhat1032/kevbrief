@@ -1,758 +1,450 @@
 """
-ThreatLumen – Illuminated Threat Intelligence Dashboard
-WeanTech / Douglas Weant
+kevbrief: patch-priority briefing from security news.
 
-Changelog from v1.0:
-  - Fixed: st.experimental_rerun() → st.rerun() (removed in Streamlit 1.40+)
-  - Fixed: Per-feed error isolation — one bad feed no longer blocks the pipeline
-  - Fixed: Removed defunct Threatpost feed; replaced with SecurityWeek
-  - Added: Concurrent feed fetching via ThreadPoolExecutor (dramatically faster cold load)
-  - Added: NVD API key support (env var NVD_API_KEY) with exponential backoff + rate limiting
-  - Added: CISA KEV catalog enrichment — flags articles whose CVEs appear in the KEV list
-  - Added: Severity-aware sorting — CRITICAL/HIGH CVE items bubble above general news
-  - Added: JSON-based article persistence (saved_articles.json) — saves survive page refresh
-  - Added: Feed health indicator in sidebar showing which sources returned items
-  - Added: Graceful degradation — all network failures are caught and surfaced, never silently swallowed
+Pulls security news feeds, pulls out the CVEs they mention, checks every one
+against the CISA Known Exploited Vulnerabilities (KEV) catalog and FIRST EPSS,
+and puts the ones to patch first at the top.
+
+Data logic lives in the `kevbrief` package (feeds.py, enrich.py, display.py); this file is layout only.
 """
 
-import re
-import json
-import time
-import hashlib
-import logging
 import os
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
-import feedparser
 import pandas as pd
-import requests
 import streamlit as st
 
-logging.basicConfig(level=logging.WARNING)
-log = logging.getLogger("threatlumen")
+from kevbrief import __version__, display, enrich, feeds
+from kevbrief.display import esc
 
+SYSTEM_NAME = "kevbrief"
+SITE_URL = "https://douglasweant.com"
+SITE_LABEL = "douglasweant.com"
 
-# ─────────────────────────────────────────────
-#   Product Identity
-# ─────────────────────────────────────────────
-SYSTEM_NAME = "ThreatLumen"
-SYSTEM_VERSION = "1.1"
-SYSTEM_TAGLINE = "Illuminated Threat Intelligence • Unified • Enriched • Triage-Ready"
-
-SAVED_PATH = Path("saved_articles.json")
-
-
-# ─────────────────────────────────────────────
-#   Page Config
-# ─────────────────────────────────────────────
 st.set_page_config(
-    page_title=f"{SYSTEM_NAME} | Illuminated Threat Intelligence",
-    page_icon="🔦",
+    page_title=f"{SYSTEM_NAME} · Patch-priority briefing",
+    page_icon="🛡️",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 
 # ─────────────────────────────────────────────
-#   Feed Config
+#   Styling (dark, custom components)
 # ─────────────────────────────────────────────
-RSS_FEEDS: Dict[str, str] = {
-    "The Hacker News":    "https://feeds.feedburner.com/TheHackersNews",
-    "Krebs on Security":  "https://krebsonsecurity.com/feed/",
-    "Bleeping Computer":  "https://www.bleepingcomputer.com/feed/",
-    "Dark Reading":       "https://www.darkreading.com/rss/all.xml",
-    "SecurityWeek":       "https://feeds.feedburner.com/securityweek",   # replaced defunct Threatpost
-    "CISA Advisories":    "https://www.cisa.gov/cybersecurity-advisories/all.xml",
-    "Schneier on Security": "https://www.schneier.com/feed/atom/",
+st.markdown("""<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+:root{
+  --bg:#07090d; --surface:#0d1117; --surface-2:#111823; --surface-3:#161f2c;
+  --border:rgba(148,163,184,.14); --border-strong:rgba(148,163,184,.24);
+  --text:#e6edf3; --text-2:#b6c2d1; --muted:#7d8a9c;
+  --accent:#22d3ee; --accent-soft:rgba(34,211,238,.12);
+  --kev:#fb923c; --kev-soft:rgba(251,146,60,.12);
+  --ransom:#f43f5e; --ransom-soft:rgba(244,63,94,.14);
+  --soon:#fbbf24; --soon-soft:rgba(251,191,36,.12);
+  --ok:#34d399; --ok-soft:rgba(52,211,153,.12);
+  --sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
 }
+.stApp{background:radial-gradient(1200px 500px at 50% -200px,rgba(34,211,238,.08),transparent 70%),var(--bg);color:var(--text);font-family:var(--sans);}
+.stApp [data-testid="stMarkdownContainer"],.stApp [data-testid="stSidebar"]{font-family:var(--sans);}
+[data-testid="stHeader"]{background:transparent;}
+[data-testid="stDecoration"],[data-testid="stToolbar"]{display:none !important;}
+.block-container{max-width:1280px;padding-top:1.4rem;padding-bottom:3rem;}
+[data-testid="stSidebar"]{background:var(--surface);border-right:1px solid var(--border);}
+[data-testid="stSidebar"] h3{font-size:.8rem;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+a{color:var(--accent);}
 
-TAG_KEYWORDS: Dict[str, List[str]] = {
-    "Ransomware":       ["ransomware", "lockbit", "encrypt", "extortion"],
-    "Supply Chain":     ["supply chain", "dependency", "npm", "pypi", "solarwinds"],
-    "Cloud / IAM":      ["aws", "azure", "gcp", "iam", "identity", "entra", "okta"],
-    "Patching Required":["patch", "update", "zero-day", "0-day", "cisa kev"],
-    "Malware":          ["malware", "trojan", "botnet", "infostealer"],
-    "Vulnerabilities":  ["cve-", "vulnerability", "remote code", "privilege escalation"],
-    "Insider Threat":   ["insider", "employee", "privileged access", "data exfiltration"],
-}
+/* top bar */
+.kb-topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;}
+.kb-brand{display:flex;align-items:center;gap:10px;}
+.kb-logo{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;
+  background:linear-gradient(135deg,#22d3ee,#6366f1);color:#05080c;font-weight:700;font-size:.9rem;font-family:var(--mono);}
+.kb-name{font-weight:700;font-size:1.05rem;letter-spacing:-.01em;color:var(--text);}
+.kb-ver{font-family:var(--mono);font-size:.7rem;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:1px 8px;}
+.kb-site{font-size:.8rem;color:var(--muted) !important;text-decoration:none !important;}
+.kb-site:hover{color:var(--accent) !important;}
 
-CVE_RE = re.compile(r"(CVE-\d{4}-\d+)", re.IGNORECASE)
+/* hero */
+.kb-hero{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;flex-wrap:wrap;
+  padding:22px 24px;border:1px solid var(--border);border-radius:14px;
+  background:linear-gradient(180deg,var(--surface-2),var(--surface));margin-bottom:16px;}
+.kb-h1{font-size:1.6rem;font-weight:700;letter-spacing:-.02em;margin:0;color:var(--text);line-height:1.2;}
+.kb-hero .kb-lede{margin:6px 0 0 0;color:var(--text-2);font-size:.92rem;max-width:720px;}
+.kb-hero-meta{display:flex;gap:8px;flex-wrap:wrap;}
+.kb-tag{font-size:.72rem;color:var(--text-2);border:1px solid var(--border);background:var(--surface-3);border-radius:999px;padding:4px 10px;white-space:nowrap;}
+.kb-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;background:var(--ok);vertical-align:middle;}
+.kb-dot-warn{background:var(--soon);} .kb-dot-bad{background:var(--ransom);}
 
-SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "": 4}
+/* stat cards */
+.kb-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:22px;}
+.kb-stat{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:14px 16px;position:relative;overflow:hidden;}
+.kb-stat::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--border-strong);}
+.kb-stat-label{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+.kb-stat-value{font-family:var(--mono);font-size:1.9rem;font-weight:600;color:var(--text);margin-top:4px;line-height:1.1;}
+.kb-stat-sub{font-size:.75rem;color:var(--muted);margin-top:4px;min-height:1em;}
+.kb-stat-accent::before{background:var(--accent);} .kb-stat-kev::before{background:var(--kev);}
+.kb-stat-kev .kb-stat-value{color:var(--kev);}
+.kb-stat-ransom::before{background:var(--ransom);} .kb-stat-ransom .kb-stat-value{color:var(--ransom);}
+@media (max-width:900px){.kb-stats{grid-template-columns:repeat(2,minmax(0,1fr));}}
 
-NVD_API_KEY = os.environ.get("NVD_API_KEY", "")
-NVD_BASE     = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-KEV_URL      = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+/* section headers */
+.kb-section{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin:8px 0 10px 0;}
+.kb-h2{font-size:1.05rem;font-weight:650;color:var(--text);}
+.kb-section .kb-sub{font-size:.78rem;color:var(--muted);}
+.kb-note{font-size:.78rem;color:var(--muted);margin:8px 2px 0 2px;line-height:1.5;}
+.kb-legend{display:flex;gap:14px;flex-wrap:wrap;font-size:.74rem;color:var(--muted);margin:8px 2px 18px 2px;}
+
+/* patch table */
+.kb-table-wrap{border:1px solid var(--border);border-radius:12px;background:var(--surface);max-height:560px;overflow:auto;}
+.kb-table{width:100%;border-collapse:separate;border-spacing:0;font-size:.82rem;}
+.kb-table thead th{position:sticky;top:0;z-index:1;background:var(--surface-3);color:var(--muted);font-weight:600;
+  font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;text-align:left;padding:9px 10px;border-bottom:1px solid var(--border-strong);white-space:nowrap;}
+.kb-table td{padding:8px 10px;border-bottom:1px solid var(--border);color:var(--text-2);vertical-align:middle;}
+.kb-table tbody tr:last-child td{border-bottom:none;}
+.kb-table tbody tr:hover td{background:rgba(148,163,184,.05);}
+.kb-row-ransom td:first-child{box-shadow:inset 3px 0 0 var(--ransom);}
+.kb-row-kev:not(.kb-row-ransom) td:first-child{box-shadow:inset 3px 0 0 var(--kev);}
+.kb-table .kb-num{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap;}
+.kb-c-rank{width:28px;color:var(--muted) !important;font-family:var(--mono);font-size:.75rem;text-align:right;}
+.kb-c-due{white-space:nowrap;}
+.kb-c-epss{white-space:nowrap;}
+.kb-c-vp{min-width:150px;color:var(--text) !important;}
+.kb-c-src{min-width:110px;font-size:.76rem;color:var(--muted) !important;}
+.kb-cve{font-family:var(--mono);font-weight:500;color:var(--accent) !important;text-decoration:none !important;white-space:nowrap;}
+.kb-cve:hover{text-decoration:underline !important;}
+.kb-muted{color:var(--muted);}
+.kb-chip{display:inline-block;font-size:.68rem;font-weight:600;letter-spacing:.04em;border-radius:6px;padding:2px 7px;border:1px solid transparent;white-space:nowrap;}
+.kb-chip-kev{color:var(--kev);background:var(--kev-soft);border-color:rgba(251,146,60,.35);}
+.kb-chip-ransom{color:#fff;background:var(--ransom);border-color:var(--ransom);}
+.kb-date{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--text-2);margin-right:8px;}
+.kb-due{font-size:.68rem;font-weight:600;border-radius:6px;padding:2px 6px;}
+.kb-due-past{color:var(--ransom);background:var(--ransom-soft);}
+.kb-due-soon{color:var(--soon);background:var(--soon-soft);}
+.kb-due-ok{color:var(--muted);}
+.kb-epss{display:inline-block;min-width:50px;text-align:right;} .kb-cvss{display:inline-block;min-width:30px;text-align:right;}
+.kb-bar{display:inline-block;width:36px;height:5px;border-radius:3px;background:rgba(148,163,184,.15);margin-left:8px;vertical-align:middle;overflow:hidden;}
+.kb-bar span{display:block;height:100%;background:var(--accent);border-radius:3px;}
+.kb-band-critical{color:var(--ransom);} .kb-band-high{color:var(--kev);} .kb-band-medium{color:var(--soon);}
+.kb-band-low{color:var(--text-2);} .kb-band-none{color:var(--muted);}
+
+/* filter chips */
+[data-baseweb="tag"],[data-tag]{background:var(--surface-3) !important;border:1px solid var(--border-strong) !important;color:var(--text-2) !important;}
+[data-tag] *{color:var(--text-2) !important;}
+[data-tag] svg{fill:var(--muted) !important;}
+/* download buttons */
+.stDownloadButton > button{background:var(--surface-2) !important;color:var(--text) !important;border:1px solid var(--border-strong) !important;
+  border-radius:8px !important;font-size:.82rem !important;padding:.35rem .9rem !important;}
+.stDownloadButton > button:hover{border-color:var(--accent) !important;color:var(--accent) !important;}
+
+/* coverage cards */
+.kb-card{border:1px solid var(--border);border-radius:12px;background:var(--surface);padding:14px 16px;margin-bottom:6px;}
+.kb-card-kev{border-left:3px solid var(--kev);}
+.kb-card-meta{display:flex;justify-content:space-between;gap:12px;font-size:.74rem;color:var(--muted);}
+.kb-card-src{font-weight:600;color:var(--text-2);}
+.kb-card-title{font-size:1rem;font-weight:600;margin:6px 0 4px 0;line-height:1.35;}
+.kb-card-title a{color:var(--text) !important;text-decoration:none !important;}
+.kb-card-title a:hover{color:var(--accent) !important;}
+.kb-card-summary{font-size:.86rem;color:var(--text-2);line-height:1.5;}
+.kb-card-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
+.kb-pill{font-size:.68rem;border:1px solid var(--border-strong);border-radius:999px;padding:2px 8px;color:var(--muted);}
+.kb-pill-cve{font-family:var(--mono);color:var(--text-2);}
+.kb-pill-kev{border-color:rgba(251,146,60,.45);color:var(--kev);background:var(--kev-soft);}
+.kb-card-also{font-size:.74rem;color:var(--muted);margin-top:8px;}
+.kb-card-also a{color:var(--text-2) !important;}
+[data-testid="stBaseButton-secondary"]{background:transparent;border:1px solid var(--border);color:var(--muted);font-size:.78rem;padding:.15rem .7rem;min-height:0;border-radius:8px;}
+[data-testid="stBaseButton-secondary"]:hover{border-color:var(--accent);color:var(--accent);}
+
+/* sidebar status */
+.kb-health{font-size:.78rem;color:var(--text-2);margin:2px 0;}
+.kb-health .kb-count{color:var(--muted);font-family:var(--mono);font-size:.72rem;}
+.kb-footer{text-align:center;color:var(--muted);font-size:.74rem;margin-top:28px;padding-top:16px;border-top:1px solid var(--border);}
+</style>""", unsafe_allow_html=True)
 
 
-# ─────────────────────────────────────────────
-#   Styling
-# ─────────────────────────────────────────────
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Roboto+Mono:wght@400;600&display=swap');
-
-:root {
-    --bg: #020509;
-    --bg-elevated: #050a12;
-    --card: #050a12;
-    --border-soft: rgba(255,255,255,0.06);
-    --accent: #1ce0ff;
-    --accent-soft: rgba(28,224,255,0.18);
-    --accent-strong: rgba(28,224,255,0.35);
-    --text-main: #f9fbff;
-    --text-muted: #8f9bb5;
-    --line: rgba(255,255,255,0.06);
-    --kev-color: #ff6b35;
-    --kev-bg: rgba(255,107,53,0.12);
-    --kev-border: rgba(255,107,53,0.4);
-}
-
-.stApp {
-    background: radial-gradient(circle at top, #07101d 0, #020508 40%, #000000 100%);
-    color: var(--text-main);
-    font-family: 'Roboto Mono', monospace;
-}
-
-h1, h2, h3, h4 {
-    font-family: 'Orbitron', sans-serif;
-    color: var(--text-main);
-}
-
-.tl-shell {
-    max-width: 1120px;
-    margin: 0 auto 1.5rem auto;
-    padding: 18px 22px;
-    border-radius: 26px;
-    background: radial-gradient(circle at top left, rgba(45,103,255,0.35), transparent 55%),
-                linear-gradient(135deg, rgba(3,8,18,0.95), rgba(3,10,22,0.98));
-    border: 1px solid var(--border-soft);
-    box-shadow: 0 0 40px rgba(0,0,0,0.8), 0 0 60px rgba(28,224,255,0.18);
-}
-
-.tl-header-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.tl-title-block { display: flex; flex-direction: column; gap: 4px; }
-
-.tl-title {
-    font-family: 'Orbitron', sans-serif;
-    font-size: 1.6rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.tl-subtitle {
-    font-size: 0.8rem;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.16em;
-}
-
-.tl-nav-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 14px;
-    border-radius: 999px;
-    border: 1px solid var(--border-soft);
-    background: rgba(3,9,18,0.9);
-    color: var(--text-muted);
-    font-size: 0.78rem;
-    text-decoration: none;
-    backdrop-filter: blur(12px);
-}
-
-.tl-nav-btn:hover { border-color: var(--accent); color: var(--accent); }
-
-.tl-meta-row {
-    margin-top: 12px;
-    padding-top: 10px;
-    border-top: 1px solid var(--line);
-    display: flex;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-}
-
-.tl-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    border-radius: 999px;
-    border: 1px solid var(--accent-strong);
-    background: var(--accent-soft);
-    font-size: 0.72rem;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    color: var(--accent);
-}
-
-.tl-meta-text { font-size: 0.8rem; color: var(--text-muted); }
-
-.news-card {
-    border-radius: 18px;
-    padding: 14px 16px;
-    margin-bottom: 12px;
-    background: linear-gradient(135deg, rgba(3,8,16,0.96), rgba(3,12,26,0.98));
-    border: 1px solid var(--border-soft);
-    box-shadow: 0 0 24px rgba(0,0,0,0.7);
-}
-
-.news-card.kev-flagged {
-    border-color: var(--kev-border);
-    box-shadow: 0 0 24px rgba(0,0,0,0.7), 0 0 16px var(--kev-bg);
-}
-
-.kev-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 3px 9px;
-    border-radius: 999px;
-    border: 1px solid var(--kev-border);
-    background: var(--kev-bg);
-    color: var(--kev-color);
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    font-weight: 600;
-    margin-bottom: 6px;
-}
-
-.news-meta {
-    font-size: 0.78rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: #7c88a0;
-    display: flex;
-    justify-content: space-between;
-}
-
-.news-title {
-    font-size: 1.02rem;
-    font-weight: 600;
-    margin: 6px 0 4px 0;
-    color: #f4f7ff;
-}
-
-.news-summary { font-size: 0.86rem; color: #c0c7d6; }
-
-.pill {
-    display: inline-block;
-    padding: 2px 8px;
-    margin-right: 4px;
-    margin-top: 4px;
-    border-radius: 999px;
-    border: 1px solid rgba(124,136,160,0.6);
-    font-size: .7rem;
-    text-transform: uppercase;
-    letter-spacing: .06em;
-    color: #a7b4d0;
-}
-
-.pill-severity-CRITICAL { border-color: #ff0066; color: #ff4d88; }
-.pill-severity-HIGH     { border-color: #ff3300; color: #ff704d; }
-.pill-severity-MEDIUM   { border-color: #ffaa00; color: #ffcc66; }
-.pill-severity-LOW      { border-color: #33cc33; color: #66ff99; }
-
-.feed-health-ok   { color: #66ff99; font-size: 0.75rem; }
-.feed-health-fail { color: #ff704d; font-size: 0.75rem; }
-
-.footer-text { color: #555; font-size: .72rem; }
-.stDownloadButton > button {
-    background: rgba(3, 9, 18, 0.9) !important;
-    color: var(--text-main) !important;
-    border: 1px solid var(--border-soft) !important;
-    border-radius: 14px !important;
-    font-family: 'Roboto Mono', monospace !important;
-}
-
-.stDownloadButton > button:hover {
-    border-color: var(--accent) !important;
-    color: var(--accent) !important;
-    background: rgba(28, 224, 255, 0.06) !important;
-}
-</style>
-""", unsafe_allow_html=True)
+def html_block(markup: str) -> None:
+    st.markdown(markup, unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────
-#   Persistence helpers
+#   Cached data access
 # ─────────────────────────────────────────────
-def load_saved() -> Dict[str, Any]:
-    """Load saved articles from disk; return empty dict on any failure."""
-    try:
-        if SAVED_PATH.exists():
-            return json.loads(SAVED_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
-        log.warning("Could not load saved_articles.json: %s", e)
-    return {}
+@st.cache_data(ttl=600, show_spinner="Fetching security news…")
+def get_feeds(names: tuple):
+    items, health = feeds.fetch_all({n: feeds.FEEDS[n] for n in names})
+    return items, health, datetime.now(timezone.utc)
 
 
-def persist_saved(data: Dict[str, Any]) -> None:
-    """Write saved articles to disk; fail silently (session state is the source of truth)."""
-    try:
-        SAVED_PATH.write_text(
-            json.dumps(data, default=str, indent=2), encoding="utf-8"
-        )
-    except Exception as e:
-        log.warning("Could not write saved_articles.json: %s", e)
+@st.cache_data(ttl=3600, show_spinner="Downloading CISA KEV catalog…")
+def get_kev():
+    return enrich.load_kev()
 
 
-# ─────────────────────────────────────────────
-#   Session State
-# ─────────────────────────────────────────────
-if "saved_articles" not in st.session_state:
-    st.session_state.saved_articles = load_saved()
-
-if "feed_health" not in st.session_state:
-    st.session_state.feed_health: Dict[str, bool] = {}
+@st.cache_data(ttl=3600, show_spinner="Fetching EPSS scores…")
+def get_epss(cves: tuple):
+    return enrich.fetch_epss(cves)
 
 
-# ─────────────────────────────────────────────
-#   Utility Functions
-# ─────────────────────────────────────────────
-def parse_date(entry: Any) -> datetime:
-    for key in ("published", "updated", "created"):
-        v = entry.get(key)
-        if v:
-            try:
-                d = parsedate_to_datetime(v)
-                return d.astimezone(timezone.utc).replace(tzinfo=None)
-            except Exception:
-                continue
-    return datetime(1970, 1, 1)
+@st.cache_resource
+def get_nvd() -> enrich.NvdClient:
+    return enrich.NvdClient(os.environ.get("NVD_API_KEY", ""))
 
 
-def label_article(title: str, summary: str) -> List[str]:
-    text = f"{title} {summary}".lower()
-    labels = [tag for tag, kws in TAG_KEYWORDS.items() if any(k in text for k in kws)]
-    return labels or ["General"]
+def fmt_dt(d: Any) -> str:
+    return d.strftime("%Y-%m-%d %H:%M UTC") if d else "date unknown"
 
 
-def extract_cves(text: str) -> List[str]:
-    return sorted(set(m.upper() for m in CVE_RE.findall(text)))
-
-
-def item_severity_rank(item: Dict[str, Any]) -> int:
-    """Return best (lowest) severity rank across all enriched CVEs for sorting."""
-    best = 4
-    for c in item.get("cves", []):
-        sev = (c.get("severity") or "").upper()
-        best = min(best, SEVERITY_ORDER.get(sev, 4))
-    return best
+if "saved" not in st.session_state:
+    st.session_state.saved = set()
 
 
 # ─────────────────────────────────────────────
-#   Feed Fetching — concurrent, isolated
+#   Top bar
 # ─────────────────────────────────────────────
-def _fetch_one(name: str, url: str) -> Tuple[str, List[Dict[str, Any]], bool]:
-    """Fetch a single feed. Returns (name, items, success)."""
-    try:
-        parsed = feedparser.parse(url)
-        entries = getattr(parsed, "entries", []) or []
-        items = []
-        for e in entries:
-            title = e.get("title", "").strip()
-            link  = e.get("link", "").strip()
-            if not (title and link):
-                continue
-            summary = e.get("summary", e.get("description", "")).strip()
-            d = parse_date(e)
-            uid = hashlib.md5(f"{name}|{title}|{link}".encode()).hexdigest()
-            items.append({
-                "id":            uid,
-                "source":        name,
-                "title":         title,
-                "link":          link,
-                "summary":       summary,
-                "published":     d,
-                "published_str": d.strftime("%Y-%m-%d %H:%M"),
-                "labels":        label_article(title, summary),
-                "cves":          [],
-                "kev_flagged":   False,
-            })
-        return name, items, bool(items)
-    except Exception as e:
-        log.warning("Feed fetch failed [%s]: %s", name, e)
-        return name, [], False
-
-
-@st.cache_data(ttl=600)
-def fetch_feeds(active_sources: Tuple[str, ...]) -> Tuple[List[Dict[str, Any]], Dict[str, bool]]:
-    """Fetch all active feeds concurrently. Returns (items, health_map)."""
-    feed_subset = {k: v for k, v in RSS_FEEDS.items() if k in active_sources}
-    all_items: List[Dict[str, Any]] = []
-    seen: set = set()
-    health: Dict[str, bool] = {}
-
-    with ThreadPoolExecutor(max_workers=len(feed_subset)) as pool:
-        futures = {pool.submit(_fetch_one, n, u): n for n, u in feed_subset.items()}
-        for future in as_completed(futures):
-            name, items, ok = future.result()
-            health[name] = ok
-            for item in items:
-                if item["id"] not in seen:
-                    seen.add(item["id"])
-                    all_items.append(item)
-
-    all_items.sort(key=lambda i: i["published"], reverse=True)
-    return all_items, health
+html_block(
+    f'<div class="kb-topbar"><div class="kb-brand"><div class="kb-logo">kb</div>'
+    f'<span class="kb-name">{SYSTEM_NAME}</span><span class="kb-ver">v{esc(__version__)}</span></div>'
+    f'<a class="kb-site" href="{SITE_URL}" target="_blank" rel="noopener">{SITE_LABEL}</a></div>'
+)
 
 
 # ─────────────────────────────────────────────
-#   NVD CVE Enrichment — with backoff + API key
-# ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
-def enrich_cve(cve_id: str) -> Dict[str, Any]:
-    """Fetch CVE details from NVD with retry/backoff. Uses NVD_API_KEY if set."""
-    headers = {"apiKey": NVD_API_KEY} if NVD_API_KEY else {}
-    # NVD rate limit: 5/30s without key, 50/30s with key
-    delay = 0.6 if NVD_API_KEY else 6.5
-
-    for attempt in range(3):
-        try:
-            time.sleep(delay * attempt)  # backoff: 0s, delay, 2×delay
-            r = requests.get(
-                NVD_BASE,
-                params={"cveId": cve_id},
-                headers=headers,
-                timeout=10,
-            )
-            if r.status_code == 403:
-                log.warning("NVD rate limited for %s", cve_id)
-                time.sleep(30)
-                continue
-            if not r.ok:
-                return {"id": cve_id}
-
-            vulns = r.json().get("vulnerabilities", [])
-            if not vulns:
-                return {"id": cve_id}
-
-            metrics = vulns[0]["cve"].get("metrics", {})
-            for key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
-                if key in metrics:
-                    cvss = metrics[key][0].get("cvssData", {})
-                    return {
-                        "id":       cve_id,
-                        "score":    cvss.get("baseScore"),
-                        "severity": (cvss.get("baseSeverity") or "").upper(),
-                    }
-            return {"id": cve_id}
-
-        except requests.Timeout:
-            log.warning("NVD timeout for %s (attempt %d)", cve_id, attempt + 1)
-        except Exception as e:
-            log.warning("NVD error for %s: %s", cve_id, e)
-            break
-
-    return {"id": cve_id}
-
-
-# ─────────────────────────────────────────────
-#   CISA KEV Enrichment
-# ─────────────────────────────────────────────
-@st.cache_data(ttl=3600)
-def fetch_kev_set() -> set:
-    """Return the set of CVE IDs currently in the CISA KEV catalog."""
-    try:
-        r = requests.get(KEV_URL, timeout=12)
-        r.raise_for_status()
-        vulns = r.json().get("vulnerabilities", [])
-        return {v["cveID"].upper() for v in vulns if v.get("cveID")}
-    except Exception as e:
-        log.warning("KEV fetch failed: %s", e)
-        return set()
-
-
-def add_enrichment(items: List[Dict[str, Any]], enrich: bool, limit: int = 40) -> None:
-    """Attach CVE + KEV enrichment to items (in-place). Operates on first `limit` items only."""
-    kev_set = fetch_kev_set()
-
-    for item in items[:limit]:
-        cves = extract_cves(f"{item['title']} {item['summary']}")
-        if cves:
-            if enrich:
-                item["cves"] = [enrich_cve(c) for c in cves]
-            else:
-                item["cves"] = [{"id": c} for c in cves]
-            # Flag if any CVE is in KEV
-            item["kev_flagged"] = bool(kev_set and any(
-                c["id"].upper() in kev_set for c in item["cves"]
-            ))
-        else:
-            item["cves"] = []
-            item["kev_flagged"] = False
-
-
-# ─────────────────────────────────────────────
-#   Export helpers
-# ─────────────────────────────────────────────
-def items_to_dataframe(items: List[Dict[str, Any]]) -> pd.DataFrame:
-    rows = []
-    for i in items:
-        rows.append({
-            "published":  i.get("published_str", ""),
-            "source":     i.get("source", ""),
-            "title":      i.get("title", ""),
-            "link":       i.get("link", ""),
-            "labels":     ", ".join(i.get("labels", [])),
-            "kev_flagged": i.get("kev_flagged", False),
-            "cves":       ", ".join(c["id"] for c in i.get("cves", []) if c.get("id")),
-        })
-    return pd.DataFrame(rows)
-
-
-def items_to_markdown(items: List[Dict[str, Any]]) -> str:
-    lines = [f"# {SYSTEM_NAME} Export\n"]
-    for i in items:
-        kev_note = " ⚠️ **CISA KEV**" if i.get("kev_flagged") else ""
-        lines.append(f"## {i['title']}{kev_note}")
-        lines.append(f"- **Published:** {i['published_str']}")
-        lines.append(f"- **Source:** {i['source']}")
-        if i.get("labels"):
-            lines.append(f"- **Tags:** {', '.join(i['labels'])}")
-        if i.get("cves"):
-            bits = []
-            for c in i["cves"]:
-                sev   = (c.get("severity") or "").upper()
-                score = c.get("score")
-                parts = [c["id"]]
-                if score is not None:
-                    parts.append(str(score))
-                if sev:
-                    parts.append(sev)
-                bits.append(" • ".join(parts))
-            lines.append(f"- **CVEs:** {', '.join(bits)}")
-        lines.append("")
-        lines.append(i["summary"])
-        lines.append(f"\n[Read more]({i['link']})\n\n---\n")
-    return "\n".join(lines)
-
-
-# ─────────────────────────────────────────────
-#   Header
-# ─────────────────────────────────────────────
-st.markdown(f"""
-<div class="tl-shell">
-  <div class="tl-header-row">
-    <div class="tl-title-block">
-      <div class="tl-subtitle">Live tool</div>
-      <div class="tl-title">{SYSTEM_NAME}</div>
-    </div>
-    <a class="tl-nav-btn" href="https://douglasweant.com" target="_self">← douglasweant.com</a>
-  </div>
-  <div class="tl-meta-row">
-    <div class="tl-pill">Threat Intel</div>
-    <div class="tl-meta-text">{SYSTEM_TAGLINE}</div>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────
-#   Sidebar
+#   Sidebar controls
 # ─────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("### Controls")
-
-    sources = st.multiselect(
-        "Sources",
-        list(RSS_FEEDS.keys()),
-        default=list(RSS_FEEDS.keys()),
-    )
-
-    time_window = st.selectbox(
-        "Time window",
-        ["Last 24 hours", "Last 3 days", "Last 7 days", "All"],
-        index=2,
-    )
-
-    theme_options = ["General"] + list(TAG_KEYWORDS.keys())
-    themes = st.multiselect("Themes", options=theme_options, default=[])
-
-    query = st.text_input("Search", placeholder="CVE-2025-1234, LockBit, Okta…")
-
-    show_saved    = st.checkbox("Show saved only", value=False)
-    enrich        = st.checkbox("Enable CVE enrichment (NVD)", value=True)
-    severity_sort = st.checkbox("Sort by severity (CRITICAL first)", value=True)
-
-    st.markdown("---")
-    if NVD_API_KEY:
-        st.markdown("🔑 **NVD API key active** — higher rate limit")
-    else:
-        st.markdown(
-            "ℹ️ Set `NVD_API_KEY` env var for higher NVD rate limits.",
-            help="Without a key, NVD allows 5 requests/30s. With a key: 50 requests/30s.",
-        )
-
-    # Feed health (populated after fetch)
-    if st.session_state.feed_health:
-        st.markdown("**Feed health**")
-        for name, ok in st.session_state.feed_health.items():
-            cls = "feed-health-ok" if ok else "feed-health-fail"
-            icon = "●" if ok else "✗"
-            st.markdown(
-                f"<span class='{cls}'>{icon} {name}</span>",
-                unsafe_allow_html=True,
-            )
+    st.markdown("### Filters")
+    sources = st.multiselect("Sources", list(feeds.FEEDS), default=list(feeds.FEEDS))
+    time_window = st.selectbox("Time window", ["Last 24 hours", "Last 3 days", "Last 7 days", "Last 30 days", "All"], index=2)
+    themes = st.multiselect("Themes", ["General"] + list(feeds.TAG_KEYWORDS), default=[])
+    query = st.text_input("Search", placeholder="CVE-2025-1234, Fortinet, Okta…")
+    kev_only = st.checkbox("Only articles that mention a KEV CVE", value=False)
+    show_saved = st.checkbox("Show saved only (this session)", value=False)
+    use_nvd = st.checkbox("Add CVSS from NVD (rate limited)", value=True)
 
 
 # ─────────────────────────────────────────────
-#   Data Pipeline
+#   Data pipeline: fetch → enrich everything → filter
 # ─────────────────────────────────────────────
-active = tuple(sources) if sources else tuple(RSS_FEEDS.keys())
-items, health = fetch_feeds(active)
-st.session_state.feed_health = health
+active = tuple(sources) if sources else tuple(feeds.FEEDS)
+all_items, health, fetched_at = get_feeds(active)
+kev, kev_err = get_kev()
+all_cves = tuple(sorted({c for i in all_items for c in i["cves"]}))
+epss, epss_err = get_epss(all_cves) if all_cves else ({}, None)
 
-# Time filter
+nvd: Dict[str, Dict[str, Any]] = {}
+nvd_client = get_nvd()
+if use_nvd and all_cves:
+    # Spend the NVD budget on the CVEs most likely to matter.
+    ordered = sorted(all_cves, key=lambda c: enrich.cve_priority_key(c, kev, epss))
+    nvd = nvd_client.lookup_many(ordered)
+
+items: List[Dict[str, Any]] = list(all_items)
 if time_window != "All":
-    base = datetime.now(timezone.utc).replace(tzinfo=None)
-    cutoff_map = {
-        "Last 24 hours": base - timedelta(days=1),
-        "Last 3 days":   base - timedelta(days=3),
-        "Last 7 days":   base - timedelta(days=7),
-    }
-    cutoff = cutoff_map[time_window]
-    items = [i for i in items if i["published"] >= cutoff]
-
-# Theme filter
+    days = {"Last 24 hours": 1, "Last 3 days": 3, "Last 7 days": 7, "Last 30 days": 30}[time_window]
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    items = [i for i in items if i["published"] and i["published"] >= cutoff]
 if themes:
     sel = set(themes)
     items = [i for i in items if sel.intersection(i["labels"])]
-
-# Search filter
 if query:
-    q = query.lower()
-    items = [
-        i for i in items
-        if q in i["title"].lower()
-        or q in i["summary"].lower()
-        or q in i["source"].lower()
-    ]
-
-# Saved filter
+    q = query.lower().strip()
+    items = [i for i in items if q in i["title"].lower() or q in i["summary"].lower()
+             or any(q in s.lower() for s in i["sources"]) or any(q in c.lower() for c in i["cves"])]
+if kev_only:
+    items = [i for i in items if any(c in kev for c in i["cves"])]
 if show_saved:
-    saved_ids = set(st.session_state.saved_articles.keys())
-    items = [i for i in items if i["id"] in saved_ids]
+    items = [i for i in items if i["id"] in st.session_state.saved]
 
-# Enrichment (CVE + KEV)
-add_enrichment(items, enrich=enrich)
-
-# Severity sort: KEV-flagged and high-severity CVEs bubble up
-if severity_sort:
-    items.sort(key=lambda i: (
-        0 if i.get("kev_flagged") else 1,   # KEV items first
-        item_severity_rank(i),               # then by CVE severity
-        -i["published"].timestamp(),         # then newest first within tier
-    ))
+items.sort(key=lambda i: enrich.item_priority_key(i, kev, epss))
+patch_rows = enrich.build_patch_table(items, kev, epss, nvd)
+kev_rows = [r for r in patch_rows if r["in_kev"]]
+today = datetime.now(timezone.utc).date()
 
 
 # ─────────────────────────────────────────────
-#   Export Controls
+#   Sidebar status (drawn after fetching so it is current)
 # ─────────────────────────────────────────────
-if items:
-    df        = items_to_dataframe(items)
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-    md_text   = items_to_markdown(items)
+def health_line(ok: bool, label: str, count: str = "", tip: str = "") -> str:
+    dot = "kb-dot" if ok else "kb-dot kb-dot-bad"
+    cnt = f' <span class="kb-count">{esc(count)}</span>' if count else ""
+    return f'<div class="kb-health" title="{esc(tip)}"><span class="{dot}"></span>{esc(label)}{cnt}</div>'
 
-    col_csv, col_md, col_spacer = st.columns([1, 1, 4])
-    with col_csv:
-        st.download_button(
-            "⬇️ Export CSV", csv_bytes,
-            file_name="threatlumen_intel.csv", mime="text/csv",
-        )
-    with col_md:
-        st.download_button(
-            "⬇️ Export Markdown", md_text,
-            file_name="threatlumen_intel.md", mime="text/markdown",
-        )
 
-st.markdown("---")
+with st.sidebar:
+    st.markdown("### Data sources")
+    lines = [health_line(h["ok"], name, str(h["count"]), h["error"] or f"{h['count']} items") for name, h in health.items()]
+    lines.append(health_line(bool(kev), "CISA KEV", f"{len(kev):,}" if kev else "unavailable", kev_err or ""))
+    lines.append(health_line(not epss_err, "FIRST EPSS", f"{len(epss)} scored", epss_err or ""))
+    if use_nvd:
+        key_note = "API key" if nvd_client.api_key else "no key · 5 / 30 s"
+        lines.append(health_line(True, "NVD CVSS", f"{len(nvd)}/{len(all_cves)} · {key_note}"))
+    html_block("".join(lines))
+    if use_nvd and nvd_client.rate_limited:
+        st.caption("NVD budget used up; remaining CVSS scores fill in on later reloads. KEV and EPSS are unaffected.")
 
 
 # ─────────────────────────────────────────────
-#   Render Items
+#   Hero
 # ─────────────────────────────────────────────
-if not items:
-    st.info("No intelligence matched the current filters.")
+live = sum(1 for h in health.values() if h["ok"])
+src_dot = "kb-dot" if live == len(health) else ("kb-dot kb-dot-warn" if live else "kb-dot kb-dot-bad")
+kev_dot = "kb-dot" if kev else "kb-dot kb-dot-bad"
+html_block(
+    '<div class="kb-hero"><div><div class="kb-h1">Patch-priority briefing</div>'
+    '<div class="kb-lede">Every CVE mentioned in today\'s security news, checked against CISA\'s Known Exploited Vulnerabilities '
+    'catalog and FIRST EPSS. Patch from the top.</div></div>'
+    '<div class="kb-hero-meta">'
+    f'<span class="kb-tag"><span class="{src_dot}"></span>{live}/{len(health)} sources live</span>'
+    f'<span class="kb-tag"><span class="{kev_dot}"></span>KEV {len(kev):,} entries</span>'
+    f'<span class="kb-tag">{esc(time_window)}</span>'
+    f'<span class="kb-tag">Updated {esc(fetched_at.strftime("%H:%M UTC"))}</span>'
+    '</div></div>'
+)
+
+if not kev:
+    st.error("Could not download the CISA KEV catalog, so nothing below is KEV-checked. "
+             "Check https://www.cisa.gov/known-exploited-vulnerabilities-catalog directly.")
+
+
+# ─────────────────────────────────────────────
+#   Stat cards
+# ─────────────────────────────────────────────
+past_due = sum(1 for r in kev_rows if display.due_status(r["kev_due_date"], today)["state"] == "past")
+due_soon = sum(1 for r in kev_rows if display.due_status(r["kev_due_date"], today)["state"] == "soon")
+ransom_known = sum(1 for r in kev_rows if r["ransomware_use"] == "Known")
+html_block(display.stat_cards([
+    {"label": "Articles", "value": len(items), "sub": f"{len(items) - sum(1 for i in items if i['cves'])} without a CVE id"},
+    {"label": "CVEs mentioned", "value": len(patch_rows), "sub": f"{sum(1 for r in patch_rows if r['epss'] is not None)} with EPSS", "tone": "accent"},
+    {"label": "In CISA KEV", "value": len(kev_rows), "sub": f"{due_soon} due within {display.SOON_DAYS}d · {past_due} past due", "tone": "kev"},
+    {"label": "Known ransomware use", "value": ransom_known, "sub": "per CISA KEV", "tone": "ransom"},
+]))
+
+
+# ─────────────────────────────────────────────
+#   Patch these first
+# ─────────────────────────────────────────────
+html_block(f'<div class="kb-section"><div class="kb-h2">Patch these first</div><span class="kb-sub">{len(patch_rows)} CVEs · '
+           f'{len(kev_rows)} in KEV</span></div>')
+if not patch_rows:
+    st.info("No CVEs mentioned in the current selection. Widen the time window or sources.")
 else:
-    st.markdown(f"**{len(items)} items** — {sum(1 for i in items if i.get('kev_flagged'))} KEV-flagged")
+    html_block(display.patch_table(patch_rows, today))
+    html_block(
+        '<div class="kb-legend">'
+        '<span><span class="kb-chip kb-chip-ransom">Known</span> CISA knows of ransomware use</span>'
+        '<span><span class="kb-due kb-due-past">past due</span> KEV federal due date has passed</span>'
+        f'<span><span class="kb-due kb-due-soon">in 5d</span> due within {display.SOON_DAYS} days</span>'
+        '<span>EPSS: chance of exploitation in the next 30 days</span>'
+        '<span>CVE ids link to NVD</span></div>'
+    )
 
+
+# ─────────────────────────────────────────────
+#   Exports
+# ─────────────────────────────────────────────
+def briefing_markdown() -> str:
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    lines = [f"# {SYSTEM_NAME} patch-priority briefing", "", f"Generated {now} • window: {time_window}", ""]
+    lines += ["## Patch these first", ""]
+    if patch_rows:
+        lines += ["| CVE | KEV | KEV due | Ransomware use | EPSS | CVSS | Vendor / product | Mentioned by |",
+                  "|---|---|---|---|---|---|---|---|"]
+        for r in patch_rows:
+            cells = [r["cve"], "yes" if r["in_kev"] else "", r["kev_due_date"] or display.DASH,
+                     r["ransomware_use"] or display.DASH, display.fmt_epss(r["epss"]), display.fmt_cvss(r["cvss"]),
+                     r["vendor_product"] or display.DASH, r["mentioned_by"]]
+            lines.append("| " + " | ".join(str(c).replace("|", "/") for c in cells) + " |")
+    else:
+        lines.append("No CVEs mentioned in this selection.")
+    lines += ["", "## Articles", ""]
+    for i in items:
+        kev_note = " (CISA KEV)" if any(c in kev for c in i["cves"]) else ""
+        lines.append(f"### {i['title']}{kev_note}")
+        lines.append(f"- Published: {fmt_dt(i['published'])}")
+        lines.append(f"- Sources: {', '.join(i['sources'])}")
+        if i["cves"]:
+            lines.append(f"- CVEs: {', '.join(i['cves'])}")
+        lines += ["", i["summary"], "", f"[Read more]({i['link']})", ""]
+    lines += ["---", "KEV is the authority on what is being exploited. News mentions are not an asset inventory."]
+    return "\n".join(lines)
+
+
+patch_df = pd.DataFrame(patch_rows)
+if items or patch_rows:
+    c1, c2, c3, _ = st.columns([1, 1, 1, 3])
+    with c1:
+        st.download_button("Patch list CSV", patch_df.to_csv(index=False).encode("utf-8") if not patch_df.empty else b"",
+                           file_name="kevbrief_patch_priority.csv", mime="text/csv", disabled=patch_df.empty)
+    with c2:
+        st.download_button("Briefing .md", briefing_markdown(),
+                           file_name="kevbrief_briefing.md", mime="text/markdown")
+    with c3:
+        art_df = pd.DataFrame([{
+            "published": fmt_dt(i["published"]), "sources": ", ".join(i["sources"]), "title": i["title"],
+            "link": i["link"], "labels": ", ".join(i["labels"]), "cves": ", ".join(i["cves"]),
+            "kev_cves": ", ".join(c for c in i["cves"] if c in kev),
+        } for i in items])
+        st.download_button("Articles CSV", art_df.to_csv(index=False).encode("utf-8"),
+                           file_name="kevbrief_articles.csv", mime="text/csv")
+
+html_block('<div class="kb-note">KEV due dates are the deadlines CISA sets for US federal agencies (BOD 22-01); '
+           'treat them as an outer limit, not a target. News mentions are not an asset scan: confirm exposure '
+           'against your own inventory.</div>')
+
+
+# ─────────────────────────────────────────────
+#   Supporting coverage
+# ─────────────────────────────────────────────
+st.write("")
+html_block(f'<div class="kb-section"><div class="kb-h2">Supporting coverage</div><span class="kb-sub">{len(items)} articles · KEV-related and '
+           f'highest-EPSS first · duplicate stories merged</span></div>')
+if not items:
+    st.info("No articles matched the current filters.")
+else:
     for item in items:
-        kev_class = "kev-flagged" if item.get("kev_flagged") else ""
-        kev_badge = '<div class="kev-badge">⚠ CISA KEV</div>' if item.get("kev_flagged") else ""
-
-        st.markdown(f"""
-<div class="news-card {kev_class}">
-  {kev_badge}
-  <div class="news-meta">
-    <span>{item['source']}</span>
-    <span>{item['published_str']}</span>
-  </div>
-  <div class="news-title">
-    <a href="{item['link']}" target="_blank" rel="noopener noreferrer">{item['title']}</a>
-  </div>
-  <div class="news-summary">{item['summary']}</div>
-</div>
-""", unsafe_allow_html=True)
-
-        # Theme pills
-        if item.get("labels"):
-            st.markdown(
-                " ".join(f"<span class='pill'>{t}</span>" for t in item["labels"]),
-                unsafe_allow_html=True,
-            )
-
-        # CVE pills
-        if item.get("cves"):
-            ctags = []
-            for c in item["cves"]:
-                sev       = (c.get("severity") or "").upper()
-                sev_class = f" pill-severity-{sev}" if sev else ""
-                parts     = [c["id"]]
-                if c.get("score") is not None:
-                    parts.append(str(c["score"]))
-                if sev:
-                    parts.append(sev)
-                ctags.append(f"<span class='pill{sev_class}'>{' • '.join(parts)}</span>")
-            st.markdown("".join(ctags), unsafe_allow_html=True)
-
-        # Save / Unsave — fixed: uses st.rerun() not experimental_rerun()
-        col_btn, _ = st.columns([1, 5])
-        with col_btn:
-            saved = item["id"] in st.session_state.saved_articles
-            label = "★ Saved" if saved else "☆ Save"
-            if st.button(label, key=f"save_{item['id']}"):
-                if saved:
-                    st.session_state.saved_articles.pop(item["id"], None)
-                else:
-                    st.session_state.saved_articles[item["id"]] = item
-                persist_saved(st.session_state.saved_articles)
-                st.rerun()   # fixed: was st.experimental_rerun()
-
-        st.markdown("<br/>", unsafe_allow_html=True)
+        kev_cves = [c for c in item["cves"] if c in kev]
+        link = feeds.safe_url(item["link"])
+        title_html = (f'<a href="{esc(link)}" target="_blank" rel="noopener noreferrer">{esc(item["title"])}</a>'
+                      if link else esc(item["title"]))
+        chips = []
+        for c in item["cves"]:
+            parts = [c]
+            if c in epss:
+                parts.append(f"EPSS {display.fmt_epss(epss[c]['epss'])}")
+            if (nvd.get(c) or {}).get("cvss") is not None:
+                parts.append(f"CVSS {display.fmt_cvss(nvd[c]['cvss'])}")
+            cls = "kb-pill kb-pill-cve kb-pill-kev" if c in kev else "kb-pill kb-pill-cve"
+            label = (" · ".join(parts)) + (" · KEV" if c in kev else "")
+            chips.append(f'<span class="{cls}">{esc(label)}</span>')
+        chips += [f'<span class="kb-pill">{esc(t)}</span>' for t in item["labels"]]
+        also = ""
+        if len(item["sources"]) > 1:
+            also_links = " · ".join(
+                f'<a href="{esc(feeds.safe_url(u))}" target="_blank" rel="noopener noreferrer">{esc(s)}</a>'
+                for s, u in item.get("links", {}).items() if feeds.safe_url(u))
+            also = f'<div class="kb-card-also">Also covered by: {also_links}</div>'
+        html_block(
+            f'<div class="kb-card{" kb-card-kev" if kev_cves else ""}">'
+            f'<div class="kb-card-meta"><span class="kb-card-src">{esc(" · ".join(item["sources"]))}</span>'
+            f'<span>{esc(fmt_dt(item["published"]))}</span></div>'
+            f'<div class="kb-card-title">{title_html}</div>'
+            f'<div class="kb-card-summary">{esc(item["summary"])}</div>'
+            f'<div class="kb-card-chips">{"".join(chips)}</div>{also}</div>'
+        )
+        saved = item["id"] in st.session_state.saved
+        if st.button("★ Saved" if saved else "☆ Save", key=f"save_{item['id']}"):
+            if saved:
+                st.session_state.saved.discard(item["id"])
+            else:
+                st.session_state.saved.add(item["id"])
+            st.rerun()
 
 
 # ─────────────────────────────────────────────
 #   Footer
 # ─────────────────────────────────────────────
-st.markdown("---")
-st.markdown(
-    f"<center class='footer-text'>{SYSTEM_NAME} {SYSTEM_VERSION} • {SYSTEM_TAGLINE}</center>",
-    unsafe_allow_html=True,
+html_block(
+    f'<div class="kb-footer">{SYSTEM_NAME} {esc(__version__)} · Data: CISA KEV, FIRST EPSS, NVD · '
+    f'News mentions are not an asset scan; CISA KEV is the authority on known exploitation</div>'
 )

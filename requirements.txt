@@ -1,4 +1,4 @@
-streamlit
-feedparser
-requests
-pandas
+streamlit==1.65.0
+pandas==3.0.6
+feedparser==6.0.14
+requests==2.34.2

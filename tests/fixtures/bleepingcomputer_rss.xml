@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Constructed fixture in the shape of BleepingComputer RSS: same stories as thehackernews_rss.xml, reported differently. -->
+<rss version="2.0">
+  <channel>
+    <title>BleepingComputer</title>
+    <link>https://www.bleepingcomputer.com/</link>
+    <item>
+      <title>Citrix patches actively exploited NetScaler flaw — CVE-2026-88779</title>
+      <link>https://www.bleepingcomputer.com/news/security/citrix-patches-netscaler-flaw/</link>
+      <pubDate>Wed, 07 Oct 2026 11:40:00 +0000</pubDate>
+      <description>Citrix urges admins to patch NetScaler now. CISA added CVE-2026-88779 to KEV.</description>
+    </item>
+    <item>
+      <title>Ransomware gang hits regional hospital chain</title>
+      <link>https://www.bleepingcomputer.com/news/security/hospital-chain-ransomware/</link>
+      <pubDate>Tue, 06 Oct 2026 20:05:00 +0000</pubDate>
+      <description>The hospital chain is diverting ambulances.</description>
+    </item>
+    <item>
+      <title>Same link, different headline</title>
+      <link>http://thehackernews.com/2026/10/hospital-ransomware.html#comments</link>
+      <pubDate>Tue, 06 Oct 2026 21:00:00 +0000</pubDate>
+      <description>Syndicated copy.</description>
+    </item>
+  </channel>
+</rss>
