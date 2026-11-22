@@ -1,4 +1,7 @@
-streamlit==1.65.0
+streamlit==1.67.0
 pandas==3.0.6
 feedparser==6.0.14
 requests==2.34.2
+# Pillow 12.3.0 (pulled in by Streamlit) has multiple advisories fixed in 13.0.0.
+# Streamlit 1.65.0 required pillow<13; 1.67.0 allows pillow<14.
+pillow==13.0.0
